@@ -1,5 +1,6 @@
 import requests
 from qdrant_client import QdrantClient
+from qdrant_client.models import Filter, FieldCondition, MatchValue
 
 from config import (
     QDRANT_URL,
@@ -7,7 +8,8 @@ from config import (
     OLLAMA_URL,
     EMBEDDING_MODEL,
     LLM_MODEL,
-    TOP_K,
+    TOP_K_TEXT,
+    TOP_K_FIGURES,
 )
 
 
@@ -24,20 +26,26 @@ def get_embedding(text: str):
     return response.json()["embedding"]
 
 
-def search_qdrant(query: str):
+def search_qdrant_by_type(query: str, source_type: str, limit: int):
     client = QdrantClient(url=QDRANT_URL)
-
     query_vector = get_embedding(query)
 
     response = client.query_points(
         collection_name=COLLECTION_NAME,
         query=query_vector,
-        limit=TOP_K,
+        query_filter=Filter(
+            must=[
+                FieldCondition(
+                    key="type",
+                    match=MatchValue(value=source_type),
+                )
+            ]
+        ),
+        limit=limit,
         with_payload=True,
     )
 
     results = response.points
-
     chunks = []
 
     for result in results:
@@ -45,24 +53,60 @@ def search_qdrant(query: str):
 
         chunks.append(
             {
+                "type": payload.get("type", "text"),
                 "score": result.score,
                 "paper_name": payload.get("paper_name"),
                 "page_number": payload.get("page_number"),
                 "chunk_index": payload.get("chunk_index"),
                 "text": payload.get("text"),
+                "caption": payload.get("caption"),
+                "image_path": payload.get("image_path"),
+                "figure_index": payload.get("figure_index"),
             }
         )
 
     return chunks
 
 
+def search_qdrant(query: str):
+    text_results = search_qdrant_by_type(
+        query=query,
+        source_type="text",
+        limit=TOP_K_TEXT,
+    )
+
+    figure_results = search_qdrant_by_type(
+        query=query,
+        source_type="figure",
+        limit=TOP_K_FIGURES,
+    )
+
+    return text_results + figure_results
+
+
 def build_prompt(query: str, chunks: list):
     context_blocks = []
 
     for i, chunk in enumerate(chunks, start=1):
-        context_blocks.append(
-            f"""
+        if chunk["type"] == "figure":
+            context_blocks.append(
+                f"""
 SOURCE {i}
+Type: Figure
+Paper: {chunk["paper_name"]}
+Page: {chunk["page_number"]}
+Figure Index: {chunk["figure_index"]}
+Similarity Score: {chunk["score"]}
+
+Caption:
+{chunk["caption"]}
+"""
+            )
+        else:
+            context_blocks.append(
+                f"""
+SOURCE {i}
+Type: Text
 Paper: {chunk["paper_name"]}
 Page: {chunk["page_number"]}
 Similarity Score: {chunk["score"]}
@@ -70,7 +114,7 @@ Similarity Score: {chunk["score"]}
 Text:
 {chunk["text"]}
 """
-        )
+            )
 
     context = "\n\n".join(context_blocks)
 
@@ -85,6 +129,8 @@ Rules:
 2. Do not make up information.
 3. Mention source paper names and page numbers in the answer.
 4. Keep the answer clear and structured.
+5. Be as detailed as possible.
+6. If a figure source is relevant, mention it in the answer.
 
 Research Context:
 {context}

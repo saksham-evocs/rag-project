@@ -6,6 +6,8 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+from figure_extract import extract_figures_from_pdfs
+
 from config import (
     QDRANT_URL,
     COLLECTION_NAME,
@@ -85,10 +87,11 @@ def ingest_pdfs():
 
     points = []
     chunk_counter = 0
+    figure_counter = 0
 
     for pdf_file in pdf_files:
         pdf_path = os.path.join(PDF_FOLDER, pdf_file)
-        print(f"Processing: {pdf_file}")
+        print(f"Processing text: {pdf_file}")
 
         pages = extract_pdf_text(pdf_path)
 
@@ -102,6 +105,7 @@ def ingest_pdfs():
                     id=str(uuid.uuid4()),
                     vector=embedding,
                     payload={
+                        "type": "text",
                         "paper_name": pdf_file,
                         "page_number": page["page_number"],
                         "chunk_index": chunk_index,
@@ -119,13 +123,52 @@ def ingest_pdfs():
                     )
                     points = []
 
+    print("Extracting and ingesting figures...")
+
+    figures = extract_figures_from_pdfs()
+
+    for figure in figures:
+        figure_text = f"""
+Paper: {figure["paper_name"]}
+Page: {figure["page_number"]}
+Figure: {figure["figure_index"]}
+Caption: {figure["caption"]}
+"""
+
+        embedding = get_embedding(figure_text)
+
+        point = PointStruct(
+            id=str(uuid.uuid4()),
+            vector=embedding,
+            payload={
+                "type": "figure",
+                "paper_name": figure["paper_name"],
+                "page_number": figure["page_number"],
+                "figure_index": figure["figure_index"],
+                "caption": figure["caption"],
+                "image_path": figure["image_path"],
+                "text": figure_text,
+            },
+        )
+
+        points.append(point)
+        figure_counter += 1
+
+        if len(points) >= 50:
+            client.upsert(
+                collection_name=COLLECTION_NAME,
+                points=points,
+            )
+            points = []
+
     if points:
         client.upsert(
             collection_name=COLLECTION_NAME,
             points=points,
         )
 
-    print(f"Ingestion complete. Total chunks stored: {chunk_counter}")
+    print(f"Ingestion complete. Total text chunks stored: {chunk_counter}")
+    print(f"Total figures stored: {figure_counter}")
 
 
 if __name__ == "__main__":

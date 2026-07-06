@@ -10,7 +10,11 @@ LLM_MODEL = "qwen2.5:7b"
 
 PDF_FOLDER = "../data/papers"
 
+FIGURE_IMAGE_FOLDER = "../data/extracted_figures"
+
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 200
 
-TOP_K = 5
+# Retrieval settings
+TOP_K_TEXT = 5
+TOP_K_FIGURES = 3
